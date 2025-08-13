@@ -31,14 +31,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
 app.mount("/resumes", StaticFiles(directory="resumes"), name="resumes")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 UPLOAD_FOLDER = "resumes"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 nlp = spacy.load("en_core_web_sm")
-genai.configure(api_key="AIzaSyCj6Tp-9kCDI3LoUiL6g9iMxuLOksFf-qE")
+genai.configure(api_key="AIzaSyB1TMfzSPPseirr6q8KTdsRcR_ZYJtUuF4")
 
 
 def get_db():
