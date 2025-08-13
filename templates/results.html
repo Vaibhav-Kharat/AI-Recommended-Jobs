@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Recommended Jobs</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+        background: #f9f9f9;
+      }
+      h1 {
+        color: #333;
+      }
+      .section {
+        margin-bottom: 30px;
+        padding: 20px;
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .job {
+        border-bottom: 1px solid #ddd;
+        padding: 10px 0;
+      }
+      .job:last-child {
+        border: none;
+      }
+      .note {
+        font-style: italic;
+        color: #555;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Resume Analysis Result</h1>
+
+    <div class="section">
+      <h2>User Details</h2>
+      <p><strong>Name:</strong> {{ gpt_data.name }}</p>
+      <p><strong>Email:</strong> {{ gpt_data.email }}</p>
+      <p><strong>Phone:</strong> {{ gpt_data.phone }}</p>
+      <p><strong>Qualification:</strong> {{ gpt_data.qualification }}</p>
+      <p><strong>Experience:</strong> {{ gpt_data.experience }}</p>
+      <p><strong>Skills:</strong> {{ gpt_data.skills }}</p>
+      <p><strong>Location:</strong> {{ gpt_data.location }}</p>
+      <p><strong>Objective:</strong> {{ gpt_data.objective }}</p>
+    </div>
+
+    <div class="section">
+      <h2>Recommended Jobs</h2>
+      {% if gpt_data.recommended_jobs %}
+      <ul>
+        {% for job in gpt_data.recommended_jobs %}
+        <li>
+          <strong>{{ job.title }}</strong> - {{ job.location }} <br />Experience
+          Required: {{ job.experience_required }} <br />Skills: {{
+          job.skills_required | join(', ') }}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No matching jobs found.</p>
+      {% endif %}
+      <p class="note">
+        📌 <strong>Note:</strong> These job recommendations are based on how
+        your <strong>skills</strong> and <strong>experience</strong> match the
+        job descriptions.
+      </p>
+    </div>
+  </body>
+</html>

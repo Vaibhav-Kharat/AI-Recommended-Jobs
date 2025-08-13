@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Resume Upload</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f2f4f8;
+        color: #333;
+        padding: 20px;
+      }
+
+      h1 {
+        font-size: 32px;
+        color: #2c3e50;
+        text-align: center;
+        position: relative;
+      }
+
+      h1::after {
+        content: "";
+        display: block;
+        width: 180px;
+        height: 3px;
+        background-color: #3498db;
+        margin: 10px auto;
+        border-radius: 3px;
+      }
+
+      form {
+        background-color: #fff;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        max-width: 400px;
+        margin: 0 auto 40px;
+        text-align: center;
+      }
+
+      input[type="file"],
+      input[type="url"] {
+        padding: 10px;
+        font-size: 16px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      button {
+        margin-top: 20px;
+        padding: 10px 25px;
+        font-size: 16px;
+        background-color: #3498db;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background-color: #2980b9;
+      }
+
+      h2 {
+        text-align: center;
+        margin-bottom: 20px;
+        color: #2c3e50;
+      }
+
+      .job-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        max-width: 1000px;
+        margin: 0 auto;
+      }
+
+      .job-card {
+        background-color: #fff;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 15px 20px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+      }
+
+      .job-card:hover {
+        transform: translateY(-6px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+      }
+
+      .job-card h3 {
+        margin-top: 0;
+        color: #2c3e50;
+      }
+
+      .job-card p {
+        margin: 5px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Upload Your Resume</h1>
+
+    <form action="/upload" method="POST" enctype="multipart/form-data">
+      <input type="file" name="resume" accept=".pdf,.docx,.doc" required />
+      <br />
+      <button type="submit">Upload</button>
+    </form>
+
+    <!-- <h2>Or Paste Resume URL</h2>
+      <form action="/upload_url" method="POST">
+        <input
+          type="url"
+          name="resume_url"
+          placeholder="https://example.com/resume.pdf"
+          required
+        />
+        <br />
+        <button type="submit">Submit URL</button>
+      </form> -->
+
+    <h2>All Available Job Postings</h2>
+
+    <div class="job-grid">
+      {% for job in all_jobs %}
+      <div class="job-card">
+        <h3>{{ job.title }}</h3>
+        <p><strong>Description:</strong> {{ job.description }}</p>
+        <p><strong>Location:</strong> {{ job.location }}</p>
+        <p>
+          <strong>Salary:</strong> ₹{{ job.salaryMin }} - ₹{{ job.salaryMax }}
+        </p>
+        <p><strong>Type:</strong> {{job.type}}</p>
+        <p><strong>Vacancies:</strong> {{job.vacancies}}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </body>
+</html>
