@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, File, UploadFile, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+# from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from pdfminer.high_level import extract_text
@@ -31,7 +31,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
 app.mount("/resumes", StaticFiles(directory="resumes"), name="resumes")
-templates = Jinja2Templates(directory="templates")
+# templates = Jinja2Templates(directory="templates")
 
 UPLOAD_FOLDER = "resumes"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -173,6 +173,11 @@ def compare_keywords(user_keywords, job_keywords):
 
 
 # --- Routes ---
+@app.get("/")
+def read_root():
+    return {"message": "Server is running successfully!"}
+
+
 @app.get("/jobs/api", response_model=list[schemas.job])
 def get_jobs_api(db: Session = Depends(get_db)):
     return service.get_job(db)
@@ -181,7 +186,8 @@ def get_jobs_api(db: Session = Depends(get_db)):
 @app.get("/jobs")
 async def index(request: Request, db: Session = Depends(get_db)):
     jobs = service.get_job(db)
-    return templates.TemplateResponse("index.html", {"request": request, "all_jobs": jobs})
+    # return templates.TemplateResponse("index.html", {"request": request, "all_jobs": jobs})
+    return jobs
 
 
 @app.post("/upload")
