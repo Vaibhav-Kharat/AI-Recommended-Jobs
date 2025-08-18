@@ -17,6 +17,10 @@ import google.generativeai as genai
 import schemas
 import service
 import models
+import requests
+
+import jwt
+from jwt.exceptions import InvalidTokenError
 
 # --- Database URL ---
 SQLALCHEMY_DATABASE_URL = (
@@ -190,41 +194,71 @@ async def index(request: Request, db: Session = Depends(get_db)):
     return jobs
 
 
-@app.post("/upload")
-async def upload_resume(request: Request, resume: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not resume.filename:
-        return JSONResponse("No file selected.", status_code=400)
+SECRET_KEY = "NEXTAUTH_SECRET"  # Replace with your actual JWT secret
+ALGORITHM = "HS256"  # Replace if different
 
-    file_path = os.path.join(UPLOAD_FOLDER, resume.filename)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(resume.file, buffer)
 
+@app.post("/recommend_jobs")
+async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_db)):
+    # 1. Get JWT token from Authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse({"error": "Missing or invalid token"}, status_code=401)
+    token = auth_header.split(" ")[1]
+
+    # 2. Decode the token
     try:
-        ext = os.path.splitext(resume.filename)[-1].lower()
-        if ext == ".pdf":
-            resume_text = extract_text(file_path)
-        elif ext == ".docx":
-            resume_text = extract_text_from_docx(file_path)
-        else:
-            return JSONResponse("Unsupported file format", status_code=400)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return JSONResponse({"error": "User ID not found in token"}, status_code=400)
+    except InvalidTokenError:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
 
-        # Extract structured resume data using Gemini
-        gpt_data = extract_with_gemini(resume_text)
+    # 3. Get resume URL from DB
+    result = db.execute(
+        text('SELECT "resumeUrl" FROM "CandidateProfile" WHERE "userId" = :id'),
+        {"id": user_id}
+    ).mappings().first()
+
+    if not result or not result["resumeUrl"]:
+        return JSONResponse({"error": "Resume URL not found for user"}, status_code=404)
+
+    resume_url = result["resumeUrl"]
+
+    # 4. Download the file
+    try:
+        response = requests.get(resume_url)
+        if response.status_code != 200:
+            return JSONResponse({"error": "Unable to download resume"}, status_code=400)
+
+        # Save temp file
+        temp_path = os.path.join(UPLOAD_FOLDER, f"user_{user_id}_resume")
+        ext = os.path.splitext(resume_url)[-1].lower()
+        with open(temp_path + ext, "wb") as f:
+            f.write(response.content)
+
+        # Extract text
+        if ext == ".pdf":
+            resume_text = extract_text(temp_path + ext)
+        elif ext == ".docx":
+            resume_text = extract_text_from_docx(temp_path + ext)
+        else:
+            return JSONResponse({"error": "Unsupported file format"}, status_code=400)
 
     except Exception as e:
-        gpt_data = {}
-        print("AI extraction failed:", e)
+        return JSONResponse({"error": f"Error processing resume: {str(e)}"}, status_code=500)
 
-    # Build user keywords
+    # 5. Extract structured data using Gemini
+    gpt_data = extract_with_gemini(resume_text)
+
+    # 6. Build user keywords
     user_keywords = build_user_keywords(gpt_data)
 
-    # Build job keywords from DB
+    # 7. Build job keywords from DB
     jobs_with_keywords = build_jobs_keywords(db)
 
-    # Compare and find matches
+    # 8. Compare and find matches
     recommended_jobs = compare_keywords(user_keywords, jobs_with_keywords)
 
-    # Pass data to template
-    return {
-        "recommended_jobs": recommended_jobs
-    }
+    return {"recommended_jobs": recommended_jobs}
