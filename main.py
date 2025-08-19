@@ -18,6 +18,7 @@ import schemas
 import service
 import models
 import requests
+from fastapi import Query
 
 import jwt
 from jwt.exceptions import InvalidTokenError
@@ -176,6 +177,85 @@ def compare_keywords(user_keywords, job_keywords):
     return matches
 
 
+# ------------------------------vice-versa function------------------------------
+
+def build_candidates_keywords(db: Session):
+    candidates = db.execute(
+        text('SELECT "userId", "resumeUrl" FROM "CandidateProfile"')
+    ).mappings().all()
+
+    candidates_with_keywords = []
+    for candidate in candidates:
+        resume_url = candidate["resumeUrl"]
+        try:
+            # Download resume
+            response = requests.get(resume_url)
+            if response.status_code != 200:
+                continue
+
+            temp_path = os.path.join(
+                UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
+            ext = os.path.splitext(resume_url)[-1].lower()
+            with open(temp_path + ext, "wb") as f:
+                f.write(response.content)
+
+            # Extract text
+            if ext == ".pdf":
+                resume_text = extract_text(temp_path + ext)
+            elif ext == ".docx":
+                resume_text = extract_text_from_docx(temp_path + ext)
+            else:
+                continue
+
+            # Extract structured data
+            gpt_data = extract_with_gemini(resume_text)
+            candidate_keywords = build_user_keywords(gpt_data)
+
+            candidates_with_keywords.append({
+                "userId": candidate["userId"],
+                "resumeUrl": resume_url,
+                "keywords": candidate_keywords,
+                "raw_data": gpt_data
+            })
+
+        except Exception as e:
+            print(f"Error processing candidate {candidate['userId']}: {e}")
+            continue
+
+    return candidates_with_keywords
+
+
+def compare_job_to_candidates(job_keywords, candidates_keywords):
+    matches = []
+    for candidate in candidates_keywords:
+        user_keywords = candidate["keywords"]
+
+        skill_match = any(
+            user_skill in job_skill or job_skill in user_skill
+            for user_skill in user_keywords["skills"]
+            for job_skill in job_keywords["skills_required"]
+        )
+
+        exp_match = False
+        try:
+            job_exp = job_keywords["experience_required"]
+            if "-" in job_exp:
+                low, high = job_exp.split("-")
+                exp_match = int(low.strip()) <= user_keywords["experience"] <= int(
+                    high.strip())
+            elif job_exp.strip().isdigit():
+                exp_match = user_keywords["experience"] >= int(job_exp.strip())
+            else:
+                exp_match = True
+        except:
+            exp_match = True
+
+        if skill_match and exp_match:
+            matches.append(candidate)
+
+    return matches
+
+
 # --- Routes ---
 @app.get("/")
 def read_root():
@@ -194,14 +274,15 @@ async def index(request: Request, db: Session = Depends(get_db)):
     return jobs
 
 
-SECRET_KEY = "NEXTAUTH_SECRET"  # Replace with your actual JWT secret
-ALGORITHM = "HS256"  # Replace if different
+SECRET_KEY = "TK2fmxH/OhyoC5M1nBc1shbw5xvjtrTOq1lSBJ1svR2BXgJkuNrSYnSPPVw="
+ALGORITHM = "HS256"
 
 
-@app.post("/recommend_jobs")
+@app.get("/recommend_jobs")
 async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_db)):
     # 1. Get JWT token from Authorization header
     auth_header = request.headers.get("Authorization")
+    # print("Auth Header:", auth_header)
     if not auth_header or not auth_header.startswith("Bearer "):
         return JSONResponse({"error": "Missing or invalid token"}, status_code=401)
     token = auth_header.split(" ")[1]
@@ -210,6 +291,7 @@ async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
+        print("found user_id:", user_id)
         if not user_id:
             return JSONResponse({"error": "User ID not found in token"}, status_code=400)
     except InvalidTokenError:
@@ -262,3 +344,68 @@ async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_
     recommended_jobs = compare_keywords(user_keywords, jobs_with_keywords)
 
     return {"recommended_jobs": recommended_jobs}
+
+
+# -------------------------------------vice-versa api-------------------------------------
+
+# @app.post("/recommend_candidates/{job_id}")
+# async def recommend_candidates_for_job(
+#     job_id: str,
+#     employer_id: int = Query(..., description="Employer ID"),
+#     db: Session = Depends(get_db)
+# ):
+#     # --- Get job from DB ---
+#     job = db.execute(
+#         text('SELECT * FROM "Job" WHERE id = :id AND status = \'ACTIVE\''),
+#         {"id": job_id}
+#     ).mappings().first()
+
+#     if not job:
+#         return JSONResponse({"error": "Job not found"}, status_code=404)
+
+#     # --- Extract job keywords ---
+#     job_keywords = extract_job_keywords(job["description"])
+#     job_with_keywords = {
+#         **job,
+#         "skills_required": [s.lower() for s in job_keywords["skills"]],
+#         "experience_required": job_keywords["experience"]
+#     }
+
+#     # --- Get all candidates with keywords ---
+#     candidates_with_keywords = build_candidates_keywords(db)
+
+#     # --- Compare job → candidates ---
+#     recommended_candidates = compare_job_to_candidates(
+#         job_with_keywords, candidates_with_keywords
+#     )
+
+#     # --- Format output with bookmark check ---
+#     result = []
+#     for candidate in recommended_candidates:
+#         profile = db.execute(
+#             text('SELECT * FROM "CandidateProfile" WHERE "userId" = :uid'),
+#             {"uid": candidate["userId"]}
+#         ).mappings().first()
+
+#         if not profile:
+#             continue
+
+#         bookmark = db.execute(
+#             text(
+#                 'SELECT 1 FROM "CandidateBookmark" WHERE "employerId" = :eid AND "candidateId" = :cid'),
+#             {"eid": employer_id, "cid": profile["id"]}
+#         ).first()
+
+#         result.append({
+#             "id": profile["id"],
+#             "fullName": profile["fullName"],
+#             "image": profile.get("image"),
+#             "jobCategory": profile.get("jobCategory"),
+#             "currentLocation": profile.get("currentLocation"),
+#             "totalExperience": profile.get("totalExperience"),
+#             "nationality": profile.get("nationality"),
+#             "resumeUrl": profile.get("resumeUrl"),
+#             "isBookmarked": bool(bookmark)
+#         })
+
+#     return {"recommended_candidates": result}

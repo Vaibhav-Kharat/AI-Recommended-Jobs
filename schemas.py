@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class jobBase(BaseModel):
     title: str
     description: str
@@ -7,11 +8,16 @@ class jobBase(BaseModel):
     salaryMin: float
     salaryMax: float
 
+
 class Config:
     orm_mode = True
+
 
 class job(jobBase):
     id: str
 
     class Config:
         from_attribute = True
+
+        class JobResponse(jobBase):
+            job_id: str
