@@ -179,81 +179,97 @@ def compare_keywords(user_keywords, job_keywords):
 
 # ------------------------------vice-versa function------------------------------
 
-# def build_candidates_keywords(db: Session):
-#     candidates = db.execute(
-#         text('SELECT "userId", "resumeUrl" FROM "CandidateProfile"')
-#     ).mappings().all()
+def build_candidates_keywords(db: Session):
+    candidates = db.execute(
+        text('SELECT "userId", "resumeUrl" FROM "CandidateProfile"')
+    ).mappings().all()
 
-#     candidates_with_keywords = []
-#     for candidate in candidates:
-#         resume_url = candidate["resumeUrl"]
-#         try:
-#             # Download resume
-#             response = requests.get(resume_url, timeout=20)
-#             if response.status_code != 200:
-#                 continue
+    candidates_with_keywords = []
+    for candidate in candidates:
+        resume_url = candidate["resumeUrl"]
+        try:
+            # Download resume
+            response = requests.get(resume_url, timeout=20)
+            if response.status_code != 200:
+                continue
 
-#             temp_path = os.path.join(
-#                 UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
-#             ext = os.path.splitext(resume_url)[-1].lower()
-#             with open(temp_path + ext, "wb") as f:
-#                 f.write(response.content)
+            temp_path = os.path.join(
+                UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
+            ext = os.path.splitext(resume_url)[-1].lower()
+            with open(temp_path + ext, "wb") as f:
+                f.write(response.content)
 
-#             # Extract text
-#             if ext == ".pdf":
-#                 resume_text = extract_text(temp_path + ext)
-#             elif ext == ".docx":
-#                 resume_text = extract_text_from_docx(temp_path + ext)
-#             else:
-#                 continue
+            # Extract text
+            if ext == ".pdf":
+                resume_text = extract_text(temp_path + ext)
+            elif ext == ".docx":
+                resume_text = extract_text_from_docx(temp_path + ext)
+            else:
+                continue
 
-#             # Extract structured data
-#             gpt_data = extract_with_gemini(resume_text)
-#             candidate_keywords = build_user_keywords(gpt_data)
+            # Extract structured data
+            gpt_data = extract_with_gemini(resume_text)
+            candidate_keywords = build_user_keywords(gpt_data)
 
-#             candidates_with_keywords.append({
-#                 "userId": candidate["userId"],
-#                 "resumeUrl": resume_url,
-#                 "keywords": candidate_keywords,
-#                 "raw_data": gpt_data
-#             })
+            candidates_with_keywords.append({
+                "userId": candidate["userId"],
+                "resumeUrl": resume_url,
+                "keywords": candidate_keywords,
+                "raw_data": gpt_data
+            })
 
-#         except Exception as e:
-#             print(f"Error processing candidate {candidate['userId']}: {e}")
-#             continue
+        except Exception as e:
+            print(f"Error processing candidate {candidate['userId']}: {e}")
+            continue
 
-#     return candidates_with_keywords
+    return candidates_with_keywords
 
 
-# def compare_job_to_candidates(job_keywords, candidates_keywords):
-#     matches = []
-#     for candidate in candidates_keywords:
-#         user_keywords = candidate["keywords"]
+def compare_job_to_candidates(job_keywords, candidates_keywords):
+    matches = []
 
-#         skill_match = any(
-#             user_skill in job_skill or job_skill in user_skill
-#             for user_skill in user_keywords["skills"]
-#             for job_skill in job_keywords["skills_required"]
-#         )
+    job_skills = set(job_keywords["skills_required"])
+    job_exp = job_keywords.get("experience_required", "")
 
-#         exp_match = False
-#         try:
-#             job_exp = job_keywords["experience_required"]
-#             if "-" in job_exp:
-#                 low, high = job_exp.split("-")
-#                 exp_match = int(low.strip()) <= user_keywords["experience"] <= int(
-#                     high.strip())
-#             elif job_exp.strip().isdigit():
-#                 exp_match = user_keywords["experience"] >= int(job_exp.strip())
-#             else:
-#                 exp_match = True
-#         except:
-#             exp_match = True
+    for candidate in candidates_keywords:
+        user_skills = set(candidate["keywords"]["skills"])
+        user_exp = candidate["keywords"].get("experience", 0)
 
-#         if skill_match and exp_match:
-#             matches.append(candidate)
+        # --- Skill match ---
+        skill_overlap = job_skills & user_skills
+        skill_score = len(skill_overlap)
 
-#     return matches
+        # --- Experience match ---
+        exp_match = False
+        exp_score = 0
+        try:
+            if "-" in job_exp:
+                low, high = job_exp.split("-")
+                low, high = int(low.strip()), int(high.strip())
+                exp_match = low <= user_exp <= high
+                exp_score = 1 if exp_match else 0
+            elif job_exp.strip().isdigit():
+                required = int(job_exp.strip())
+                exp_match = user_exp >= required
+                exp_score = 1 if exp_match else 0
+            else:
+                exp_score = 1  # if not specified, ignore exp
+        except:
+            exp_score = 0
+
+        # --- Final score ---
+        total_score = (skill_score * 2) + exp_score
+
+        if total_score > 0:  # at least some match
+            matches.append({
+                **candidate,
+                "score": total_score,
+                "matched_skills": list(skill_overlap),
+            })
+
+    # Sort by score (best first)
+    matches.sort(key=lambda x: x["score"], reverse=True)
+    return matches
 
 
 # --- Routes ---
@@ -348,64 +364,76 @@ async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_
 
 # -------------------------------------vice-versa api-------------------------------------
 
-# @app.post("/recommend_candidates/{job_id}")
-# async def recommend_candidates_for_job(
-#     job_id: str,
-#     employer_id: int = Query(..., description="Employer ID"),
-#     db: Session = Depends(get_db)
-# ):
-#     # --- Get job from DB ---
-#     job = db.execute(
-#         text('SELECT * FROM "Job" WHERE id = :id AND status = \'ACTIVE\''),
-#         {"id": job_id}
-#     ).mappings().first()
+@app.get("/recommend_candidates/{job_id}")
+async def recommend_candidates_for_job(
+    job_id: str,
+    db: Session = Depends(get_db) 
+):
+    # --- Get job from DB ---
+    job = db.execute(
+        text('SELECT * FROM "Job" WHERE id = :id AND status = \'ACTIVE\''),
+        {"id": job_id}
+    ).mappings().first()
 
-#     if not job:
-#         return JSONResponse({"error": "Job not found"}, status_code=404)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
 
-#     # --- Extract job keywords ---
-#     job_keywords = extract_job_keywords(job["description"])
-#     job_with_keywords = {
-#         **job,
-#         "skills_required": [s.lower() for s in job_keywords["skills"]],
-#         "experience_required": job_keywords["experience"]
-#     }
+    # --- Extract job keywords ---
+    job_keywords = extract_job_keywords(job["description"])
+    job_with_keywords = {
+        **job,
+        "skills_required": [s.lower() for s in job_keywords["skills"]],
+        "experience_required": job_keywords["experience"]
+    }
 
-#     # --- Get all candidates with keywords ---
-#     candidates_with_keywords = build_candidates_keywords(db)
+    # --- Get all candidates with keywords ---
+    candidates_with_keywords = build_candidates_keywords(db)
 
-#     # --- Compare job → candidates ---
-#     recommended_candidates = compare_job_to_candidates(
-#         job_with_keywords, candidates_with_keywords
-#     )
+    # --- Compare job → candidates ---
+    recommended_candidates = compare_job_to_candidates(
+        job_with_keywords, candidates_with_keywords
+    )
 
-#     # --- Format output with bookmark check ---
-#     result = []
-#     for candidate in recommended_candidates:
-#         profile = db.execute(
-#             text('SELECT * FROM "CandidateProfile" WHERE "userId" = :uid'),
-#             {"uid": candidate["userId"]}
-#         ).mappings().first()
+    # --- Format output with bookmark check ---
+    result = []
+    for candidate in recommended_candidates:
+        profile = db.execute(
+            text("""
+        SELECT cp.id,
+               cp."jobCategory",
+               cp."currentLocation",
+               cp."totalExperience",
+               cp."nationality",
+               cp."resumeUrl",
+               u."fullName",
+               u."image"
+        FROM "CandidateProfile" cp
+        JOIN "User" u ON cp."userId" = u.id
+        WHERE cp."userId" = :uid
+    """),
+            {"uid": candidate["userId"]}
+        ).mappings().first()
 
-#         if not profile:
-#             continue
+        if not profile:
+            continue
 
-#         bookmark = db.execute(
-#             text(
-#                 'SELECT 1 FROM "CandidateBookmark" WHERE "employerId" = :eid AND "candidateId" = :cid'),
-#             {"eid": employer_id, "cid": profile["id"]}
-#         ).first()
+        bookmark = db.execute(
+            text(
+                'SELECT 1 FROM "CandidateBookmark" WHERE "employerId" = :eid AND "candidateId" = :cid'
+            ),
+            {"eid": job["employerId"], "cid": profile["id"]}
+        ).first()
 
-#         result.append({
-#             "id": profile["id"],
-#             "fullName": profile["fullName"],
-#             "image": profile.get("image"),
-#             "jobCategory": profile.get("jobCategory"),
-#             "currentLocation": profile.get("currentLocation"),
-#             "totalExperience": profile.get("totalExperience"),
-#             "nationality": profile.get("nationality"),
-#             "resumeUrl": profile.get("resumeUrl"),
-#             "isBookmarked": bool(bookmark)
-#         })
+        result.append({
+            "id": profile["id"],
+            "fullName": profile["fullName"],
+            "image": profile["image"],
+            "jobCategory": profile["jobCategory"],
+            "currentLocation": profile["currentLocation"],
+            "totalExperience": profile["totalExperience"],
+            "nationality": profile["nationality"],
+            "resumeUrl": profile["resumeUrl"],
+            "isBookmarked": bool(bookmark)
+        })
 
-#     return {"recommended_candidates": result}
+    return {"recommended_candidates": result}
