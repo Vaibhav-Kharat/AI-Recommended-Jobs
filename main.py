@@ -179,81 +179,81 @@ def compare_keywords(user_keywords, job_keywords):
 
 # ------------------------------vice-versa function------------------------------
 
-def build_candidates_keywords(db: Session):
-    candidates = db.execute(
-        text('SELECT "userId", "resumeUrl" FROM "CandidateProfile"')
-    ).mappings().all()
+# def build_candidates_keywords(db: Session):
+#     candidates = db.execute(
+#         text('SELECT "userId", "resumeUrl" FROM "CandidateProfile"')
+#     ).mappings().all()
 
-    candidates_with_keywords = []
-    for candidate in candidates:
-        resume_url = candidate["resumeUrl"]
-        try:
-            # Download resume
-            response = requests.get(resume_url)
-            if response.status_code != 200:
-                continue
+#     candidates_with_keywords = []
+#     for candidate in candidates:
+#         resume_url = candidate["resumeUrl"]
+#         try:
+#             # Download resume
+#             response = requests.get(resume_url, timeout=20)
+#             if response.status_code != 200:
+#                 continue
 
-            temp_path = os.path.join(
-                UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
-            ext = os.path.splitext(resume_url)[-1].lower()
-            with open(temp_path + ext, "wb") as f:
-                f.write(response.content)
+#             temp_path = os.path.join(
+#                 UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
+#             ext = os.path.splitext(resume_url)[-1].lower()
+#             with open(temp_path + ext, "wb") as f:
+#                 f.write(response.content)
 
-            # Extract text
-            if ext == ".pdf":
-                resume_text = extract_text(temp_path + ext)
-            elif ext == ".docx":
-                resume_text = extract_text_from_docx(temp_path + ext)
-            else:
-                continue
+#             # Extract text
+#             if ext == ".pdf":
+#                 resume_text = extract_text(temp_path + ext)
+#             elif ext == ".docx":
+#                 resume_text = extract_text_from_docx(temp_path + ext)
+#             else:
+#                 continue
 
-            # Extract structured data
-            gpt_data = extract_with_gemini(resume_text)
-            candidate_keywords = build_user_keywords(gpt_data)
+#             # Extract structured data
+#             gpt_data = extract_with_gemini(resume_text)
+#             candidate_keywords = build_user_keywords(gpt_data)
 
-            candidates_with_keywords.append({
-                "userId": candidate["userId"],
-                "resumeUrl": resume_url,
-                "keywords": candidate_keywords,
-                "raw_data": gpt_data
-            })
+#             candidates_with_keywords.append({
+#                 "userId": candidate["userId"],
+#                 "resumeUrl": resume_url,
+#                 "keywords": candidate_keywords,
+#                 "raw_data": gpt_data
+#             })
 
-        except Exception as e:
-            print(f"Error processing candidate {candidate['userId']}: {e}")
-            continue
+#         except Exception as e:
+#             print(f"Error processing candidate {candidate['userId']}: {e}")
+#             continue
 
-    return candidates_with_keywords
+#     return candidates_with_keywords
 
 
-def compare_job_to_candidates(job_keywords, candidates_keywords):
-    matches = []
-    for candidate in candidates_keywords:
-        user_keywords = candidate["keywords"]
+# def compare_job_to_candidates(job_keywords, candidates_keywords):
+#     matches = []
+#     for candidate in candidates_keywords:
+#         user_keywords = candidate["keywords"]
 
-        skill_match = any(
-            user_skill in job_skill or job_skill in user_skill
-            for user_skill in user_keywords["skills"]
-            for job_skill in job_keywords["skills_required"]
-        )
+#         skill_match = any(
+#             user_skill in job_skill or job_skill in user_skill
+#             for user_skill in user_keywords["skills"]
+#             for job_skill in job_keywords["skills_required"]
+#         )
 
-        exp_match = False
-        try:
-            job_exp = job_keywords["experience_required"]
-            if "-" in job_exp:
-                low, high = job_exp.split("-")
-                exp_match = int(low.strip()) <= user_keywords["experience"] <= int(
-                    high.strip())
-            elif job_exp.strip().isdigit():
-                exp_match = user_keywords["experience"] >= int(job_exp.strip())
-            else:
-                exp_match = True
-        except:
-            exp_match = True
+#         exp_match = False
+#         try:
+#             job_exp = job_keywords["experience_required"]
+#             if "-" in job_exp:
+#                 low, high = job_exp.split("-")
+#                 exp_match = int(low.strip()) <= user_keywords["experience"] <= int(
+#                     high.strip())
+#             elif job_exp.strip().isdigit():
+#                 exp_match = user_keywords["experience"] >= int(job_exp.strip())
+#             else:
+#                 exp_match = True
+#         except:
+#             exp_match = True
 
-        if skill_match and exp_match:
-            matches.append(candidate)
+#         if skill_match and exp_match:
+#             matches.append(candidate)
 
-    return matches
+#     return matches
 
 
 # --- Routes ---
@@ -310,7 +310,7 @@ async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_
 
     # 4. Download the file
     try:
-        response = requests.get(resume_url)
+        response = requests.get(resume_url, timeout=20)
         if response.status_code != 200:
             return JSONResponse({"error": "Unable to download resume"}, status_code=400)
 
