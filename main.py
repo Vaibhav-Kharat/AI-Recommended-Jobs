@@ -1,11 +1,12 @@
 import os
+import io
 import re
 import json
 import shutil
 import spacy
 from docx import Document
 from tempfile import NamedTemporaryFile
-from fastapi import FastAPI, Request, File, UploadFile, Depends
+from fastapi import FastAPI, Request, File, UploadFile, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -193,17 +194,15 @@ def build_candidates_keywords(db: Session):
             if response.status_code != 200:
                 continue
 
-            temp_path = os.path.join(
-                UPLOAD_FOLDER, f"user_{candidate['userId']}_resume")
             ext = os.path.splitext(resume_url)[-1].lower()
-            with open(temp_path + ext, "wb") as f:
-                f.write(response.content)
+            resume_text = ""
 
             # Extract text
             if ext == ".pdf":
-                resume_text = extract_text(temp_path + ext)
+                resume_text = extract_text(io.BytesIO(response.content))
             elif ext == ".docx":
-                resume_text = extract_text_from_docx(temp_path + ext)
+                doc = Document(io.BytesIO(response.content))
+                resume_text = "\n".join([p.text for p in doc.paragraphs])
             else:
                 continue
 
@@ -270,6 +269,22 @@ def compare_job_to_candidates(job_keywords, candidates_keywords):
     # Sort by score (best first)
     matches.sort(key=lambda x: x["score"], reverse=True)
     return matches
+
+
+def get_current_employer(request: Request):
+    """Extract employer info from JWT"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload  # will contain employer_id / role
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 # --- Routes ---
@@ -366,19 +381,55 @@ async def recommend_jobs_from_token(request: Request, db: Session = Depends(get_
 
 @app.get("/recommend_candidates/{job_id}")
 async def recommend_candidates_for_job(
-    job_id: str,
-    db: Session = Depends(get_db) 
+    job_id: str,   # cuid/uuid style for Job.id
+    request: Request,
+    db: Session = Depends(get_db)
 ):
-    # --- Get job from DB ---
+    # --- Get JWT token ---
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse({"error": "Missing or invalid token"}, status_code=401)
+
+    token = auth_header.split(" ")[1]
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return JSONResponse({"error": "Token expired"}, status_code=401)
+    except jwt.InvalidTokenError:
+        return JSONResponse({"error": "Invalid token"}, status_code=401)
+
+    # --- Extract user_id from token ---
+    user_id = decoded_token.get("sub")
+    if not user_id:
+        return JSONResponse({"error": "User ID not found in token"}, status_code=400)
+
+    # ✅ Fetch employer_id from DB using user_id (no type mismatch now)
+    employer = db.execute(
+        text('SELECT id FROM "EmployerProfile" WHERE "userId" = :uid'),
+        {"uid": user_id}
+    ).mappings().first()
+
+    if not employer:
+        return JSONResponse({"error": "Employer not found"}, status_code=404)
+
+    employer_id = employer["id"]
+
+    # ✅ 2. Verify job belongs to this employer directly in query
     job = db.execute(
-        text('SELECT * FROM "Job" WHERE id = :id AND status = \'ACTIVE\''),
-        {"id": job_id}
+        text("""
+            SELECT * 
+            FROM "Job" 
+            WHERE id = :jid 
+              AND "employerId" = :eid 
+              AND status = 'ACTIVE'
+        """),
+        {"jid": job_id, "eid": employer_id}
     ).mappings().first()
 
     if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
+        return JSONResponse({"error": "Job not found or not owned by this employer"}, status_code=404)
 
-    # --- Extract job keywords ---
+    # ✅ 3. Extract job keywords
     job_keywords = extract_job_keywords(job["description"])
     job_with_keywords = {
         **job,
@@ -386,31 +437,31 @@ async def recommend_candidates_for_job(
         "experience_required": job_keywords["experience"]
     }
 
-    # --- Get all candidates with keywords ---
+    # ✅ 4. Get all candidates
     candidates_with_keywords = build_candidates_keywords(db)
 
-    # --- Compare job → candidates ---
+    # ✅ 5. Compare job → candidates
     recommended_candidates = compare_job_to_candidates(
         job_with_keywords, candidates_with_keywords
     )
 
-    # --- Format output with bookmark check ---
+    # ✅ 6. Build output
     result = []
     for candidate in recommended_candidates:
         profile = db.execute(
             text("""
-        SELECT cp.id,
-               cp."jobCategory",
-               cp."currentLocation",
-               cp."totalExperience",
-               cp."nationality",
-               cp."resumeUrl",
-               u."fullName",
-               u."image"
-        FROM "CandidateProfile" cp
-        JOIN "User" u ON cp."userId" = u.id
-        WHERE cp."userId" = :uid
-    """),
+                SELECT cp.id,
+                       cp."jobCategory",
+                       cp."currentLocation",
+                       cp."totalExperience",
+                       cp."nationality",
+                       cp."resumeUrl",
+                       u."fullName",
+                       u."image"
+                FROM "CandidateProfile" cp
+                JOIN "User" u ON cp."userId" = u.id
+                WHERE cp."userId" = :uid
+            """),
             {"uid": candidate["userId"]}
         ).mappings().first()
 
@@ -421,7 +472,7 @@ async def recommend_candidates_for_job(
             text(
                 'SELECT 1 FROM "CandidateBookmark" WHERE "employerId" = :eid AND "candidateId" = :cid'
             ),
-            {"eid": job["employerId"], "cid": profile["id"]}
+            {"eid": employer_id, "cid": profile["id"]}
         ).first()
 
         result.append({
